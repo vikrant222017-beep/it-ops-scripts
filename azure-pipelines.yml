@@ -1,0 +1,109 @@
+# azure-pipelines.yml
+# CI/CD pipeline for Selin Tea Web App -> Azure App Service
+
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  buildConfiguration: 'Release'
+  azureSubscription: 'SelinTea-Azure-ServiceConnection'   # Service connection name in DevOps
+  webAppNameDev: 'selin-tea-webapp-dev'
+  webAppNameProd: 'selin-tea-webapp-prod'
+  appDirectory: '$(System.DefaultWorkingDirectory)'
+
+stages:
+
+# ---------------------------------------------------------
+- stage: Build
+  displayName: 'Build and Test'
+  jobs:
+    - job: BuildJob
+      displayName: 'Build App'
+      steps:
+        - task: UseNode@1
+          inputs:
+            version: '20.x'
+          displayName: 'Install Node.js'
+
+        - script: |
+            npm install
+            npm run build
+          displayName: 'Install dependencies and build'
+
+        - script: |
+            npm test -- --ci
+          displayName: 'Run unit tests'
+          continueOnError: false
+
+        - task: ArchiveFiles@2
+          displayName: 'Archive build output'
+          inputs:
+            rootFolderOrFile: '$(appDirectory)/build'
+            includeRootFolder: false
+            archiveType: 'zip'
+            archiveFile: '$(Build.ArtifactStagingDirectory)/selin-tea-$(Build.BuildId).zip'
+
+        - task: PublishBuildArtifacts@1
+          displayName: 'Publish artifact'
+          inputs:
+            PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+            ArtifactName: 'drop'
+            publishLocation: 'Container'
+
+# ---------------------------------------------------------
+- stage: DeployDev
+  displayName: 'Deploy to Dev'
+  dependsOn: Build
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/develop'))
+  jobs:
+    - deployment: DeployDevJob
+      displayName: 'Deploy to Dev App Service'
+      environment: 'selin-tea-dev'
+      pool:
+        vmImage: 'ubuntu-latest'
+      strategy:
+        runOnce:
+          deploy:
+            steps:
+              - download: current
+                artifact: drop
+
+              - task: AzureWebApp@1
+                displayName: 'Deploy to Azure Web App (Dev)'
+                inputs:
+                  azureSubscription: '$(azureSubscription)'
+                  appType: 'webAppLinux'
+                  appName: '$(webAppNameDev)'
+                  package: '$(Pipeline.Workspace)/drop/selin-tea-$(Build.BuildId).zip'
+
+# ---------------------------------------------------------
+- stage: DeployProd
+  displayName: 'Deploy to Production'
+  dependsOn: Build
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+  jobs:
+    - deployment: DeployProdJob
+      displayName: 'Deploy to Prod App Service'
+      environment: 'selin-tea-prod'   # Configure approvals/checks on this environment in DevOps
+      pool:
+        vmImage: 'ubuntu-latest'
+      strategy:
+        runOnce:
+          deploy:
+            steps:
+              - download: current
+                artifact: drop
+
+              - task: AzureWebApp@1
+                displayName: 'Deploy to Azure Web App (Prod)'
+                inputs:
+                  azureSubscription: '$(azureSubscription)'
+                  appType: 'webAppLinux'
+                  appName: '$(webAppNameProd)'
+                  package: '$(Pipeline.Workspace)/drop/selin-tea-$(Build.BuildId).zip'
