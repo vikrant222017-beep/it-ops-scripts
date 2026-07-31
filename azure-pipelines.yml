@@ -1,0 +1,75 @@
+trigger:
+- main
+
+pool:
+  vmImage: windows-latest
+
+variables:
+  BuildConfiguration: Release
+  AzureSubscription: 'Azure-Service-Connection'
+  WebAppName: 'your-webapp-name'
+
+stages:
+
+- stage: Build
+  jobs:
+  - job: Build
+    steps:
+
+    - task: UseDotNet@2
+      inputs:
+        packageType: sdk
+        version: '8.0.x'
+
+    - task: DotNetCoreCLI@2
+      displayName: Restore
+      inputs:
+        command: restore
+        projects: '**/*.csproj'
+
+    - task: DotNetCoreCLI@2
+      displayName: Build
+      inputs:
+        command: build
+        projects: '**/*.csproj'
+        arguments: '--configuration $(BuildConfiguration)'
+
+    - task: DotNetCoreCLI@2
+      displayName: Test
+      inputs:
+        command: test
+        projects: '**/*Tests/*.csproj'
+        arguments: '--configuration $(BuildConfiguration)'
+
+    - task: DotNetCoreCLI@2
+      displayName: Publish
+      inputs:
+        command: publish
+        publishWebProjects: true
+        arguments: '--configuration $(BuildConfiguration) --output $(Build.ArtifactStagingDirectory)'
+        zipAfterPublish: true
+
+    - publish: $(Build.ArtifactStagingDirectory)
+      artifact: drop
+
+- stage: Deploy
+  dependsOn: Build
+
+  jobs:
+  - deployment: Deploy
+    environment: Production
+
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+
+          - download: current
+            artifact: drop
+
+          - task: AzureWebApp@1
+            inputs:
+              azureSubscription: $(AzureSubscription)
+              appType: webApp
+              appName: $(WebAppName)
+              package: '$(Pipeline.Workspace)/drop/**/*.zip'
